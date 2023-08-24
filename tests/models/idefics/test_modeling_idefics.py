@@ -425,18 +425,16 @@ class IdeficsForVisionText2TextTest(IdeficsModelTest, unittest.TestCase):
     def test_retain_grad_hidden_states_attentions(self):
         pass
 
+from transformers.testing_utils import run_test_in_subprocess,
 
-@unittest.skipIf(not is_torch_greater_or_equal_than_2_0, reason="pytorch 2.0 or higher is required")
-@require_torch
-@require_vision
-class IdeficsModelIntegrationTest(TestCasePlus):
-    @cached_property
-    def default_processor(self):
-        return IdeficsProcessor.from_pretrained("HuggingFaceM4/idefics-9b") if is_vision_available() else None
+import traceback
 
-    @slow
-    def test_inference_natural_language_visual_reasoning(self):
-        cat_image_path = self.tests_dir / "fixtures/tests_samples/COCO/000000039769.png"
+def _test_inference_natural_language_visual_reasoning(in_queue, out_queue, timeout):
+    error = None
+    try:
+        inputs = in_queue.get(timeout=timeout)
+
+        cat_image_path = inputs["tests_dir"] / "fixtures/tests_samples/COCO/000000039769.png"
         cats_image_obj = Image.open(cat_image_path)  # 2 cats
         dogs_image_url = "https://huggingface.co/datasets/hf-internal-testing/fixtures_nlvr2/raw/main/image1.jpeg"
 
@@ -460,7 +458,8 @@ class IdeficsModelIntegrationTest(TestCasePlus):
         ]
 
         model = IdeficsForVisionText2Text.from_pretrained("HuggingFaceM4/idefics-9b").to(torch_device)
-        processor = self.default_processor
+
+        processor = IdeficsProcessor.from_pretrained("HuggingFaceM4/idefics-9b") if is_vision_available() else None
         inputs = processor(prompts, return_tensors="pt").to(torch_device)
         generated_ids = model.generate(**inputs, max_length=100)
         generated_text = processor.batch_decode(generated_ids, skip_special_tokens=True)
@@ -470,5 +469,24 @@ class IdeficsModelIntegrationTest(TestCasePlus):
             t = bytes(t, "utf-8").decode("unicode_escape")
             print(f"{i}:\n{t}\n")
 
-        self.assertIn("image of two cats", generated_text[0])
-        self.assertIn("image of two dogs", generated_text[1])
+        unittest.assertIn("image of two cats", generated_text[0])
+        unittest.assertIn("image of two dogs", generated_text[1])
+    except Exception:
+        error = f"{traceback.format_exc()}"
+
+    results = {"error": error}
+    out_queue.put(results, timeout=timeout)
+    out_queue.join()
+
+
+@unittest.skipIf(not is_torch_greater_or_equal_than_2_0, reason="pytorch 2.0 or higher is required")
+@require_torch
+@require_vision
+class IdeficsModelIntegrationTest(TestCasePlus):
+    @slow
+    def test_inference_natural_language_visual_reasoning(self):
+        run_test_in_subprocess(
+            test_case=self,
+            target_func=_test_inference_natural_language_visual_reasoning,
+            inputs={"tests_dir": self.tests_dir}
+        )
